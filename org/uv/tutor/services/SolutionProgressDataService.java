@@ -5,6 +5,8 @@ import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.connection.RedisKeyCommands;
+import org.springframework.data.redis.connection.RedisStringCommands;
 import org.springframework.stereotype.Service;
 import org.uv.legacy.tutor.model.Language;
 import org.uv.legacy.tutor.model.LocalizedLanguage;
@@ -22,51 +24,61 @@ public class SolutionProgressDataService {
     private WrapperService wrapperService;
     private RealizedProblemService realizedProblemService;
     private ObjectToBytesSerializer<SolutionProgressData> serializer;
+    private RedisKeyCommands keyCommands;
+    private RedisStringCommands stringCommands;
     private Language language;
 
     private static final Logger logger = LoggerFactory.getLogger(SolutionProgressDataService.class);
 
     /**
-     * Saves in the local http session
-     * SHOULD BE DELETED WHEN PERFORMANCE EXPERIMENTS ARE FINISHED @see
-     * {@link org.uv.tutor.controllers.ChatControllerSession}
+     * Deletes an object from the redisDB
      * 
-     * @param key
-     * @param userSession
-     * @param session     a reference to the local httpsession engine
+     * @param sessionId the key of the object to delete
      */
-    public void save(String key, SolutionProgressData userSession, HttpSession session) {
+    public void delete(String sessionId) {
+        keyCommands.del(sessionId.getBytes());
+    }
+
+    public void deleteAll() {
+        Set<byte[]> allKeys = keyCommands.keys("*".getBytes());
+        if (allKeys != null) {
+            byte[][] keySet = allKeys.toArray(new byte[allKeys.size()][]);
+            keyCommands.del(keySet);
+        }
+    }
+
+    /**
+     * Saves in Redis
+     * 
+     * @param key         key under to store the object
+     * @param userSession the object to save
+     */
+    public void save(String key, SolutionProgressData userSession) {
         SolutionProgressData data = new SolutionProgressData(userSession);
         data.setWrapperId(data.getWrapper().getId());
         data.setWrapper(null);
         data.setRealizedProblemId(data.getRealizedProblem().getId());
         data.setRealizedProblem(null);
-        byte[] serialized = serializer.toBytes(data);
-        session.setAttribute("CSSO", serialized);
+        val serialized = serializer.toBytes(data);
+        stringCommands.set(key.getBytes(), serialized);
     }
 
-    /**
-     * Retrieves the SolutionProgressData from the internal session storage.
-     * SHOULD BE DELETED WHEN PERFORMANCE EXPERIMENTS ARE FINISHED @see
-     * {@link org.uv.tutor.controllers.ChatControllerSession}
-     * 
-     * @param sessionId
-     * @param session
-     * @return
-     * 
-     */
-    public SolutionProgressData load(String sessionId, HttpSession session) {
-        val bytes = (byte[]) session.getAttribute("CSSO");
+    public SolutionProgressData load(String sessionId) {
+        logger.info("Getting redis session on {} ", sessionId);
+        val bytes = stringCommands.get(sessionId.getBytes());
         if (bytes == null) {
             return null;
         }
         val userSession = serializer.fromBytes(bytes);
+        if (userSession == null) {
+            return null;
+        }
 
         userSession.setWrapper(wrapperService.get(userSession.getWrapperId()));
         userSession.setRealizedProblem(realizedProblemService.get(userSession.getRealizedProblemId()));
         userSession.setLocalizedLanguage(new LocalizedLanguage(language, userSession.getLocale()));
-        userSession.setTemporaryHashmap(new HashMap<>());
 
+        userSession.setTemporaryHashmap(new HashMap<>());
         return userSession;
     }
 
